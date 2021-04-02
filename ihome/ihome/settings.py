@@ -17,6 +17,7 @@ import sys
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(BASE_DIR, "ihome"))
+sys.path.insert(0, os.path.join(BASE_DIR, "ihome/apps"))
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/1.11/howto/deployment/checklist/
 
@@ -63,10 +64,13 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'corsheaders',
     'users',
+    'verifications',
+    'homes',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     # 'django.middleware.csrf.CsrfViewMiddleware',
@@ -123,7 +127,7 @@ CACHES = {
             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
         }
     },
-    'verify_code': {
+    'verify_code': {  # 验证码
         'BACKEND': 'django_redis.cache.RedisCache',
         'LOCATION': 'redis://127.0.0.1:6379/2',
         'OPTIONS': {
@@ -132,7 +136,9 @@ CACHES = {
     }
 
 }
-
+# 配置session的保存路径
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+SESSION_CACHE_ALIAS = 'session'
 # Password validation
 # https://docs.djangoproject.com/en/1.11/ref/settings/#auth-password-validators
 
@@ -171,3 +177,5 @@ STATIC_URL = '/static/'
 
 # 使用自己的自定义模型类
 AUTH_USER_MODEL = 'users.User'
+# 七牛云
+QINIU_URL = 'http://qqopf1are.hn-bkt.clouddn.com/'

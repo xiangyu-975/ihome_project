@@ -1,3 +1,6 @@
+from datetime import datetime
+
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
@@ -16,3 +19,20 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.username
+
+    def to_basic_dict(self):
+        data = {
+            'avatar_url': settings.QINIU_URL + self.avatar.name,
+            'create_time': datetime.strftime(self.date_joined, '%Y-%m-%d %H:%M:%S'),
+            'mobile': self.mobile,
+            'name': self.username,
+            'user_id': self.id
+        }
+        return data
+
+    def to_auth_dict(self):
+        data = {
+            'real_name': self.real_name,
+            'id_card': self.id_card,
+        }
+        return data

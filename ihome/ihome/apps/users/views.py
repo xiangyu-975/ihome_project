@@ -1,12 +1,24 @@
 import json
+import logging
 import re
 
 from django import http
+from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.shortcuts import render
+from django.utils.decorators import method_decorator
+from django_redis import get_redis_connection
+from pymysql import DatabaseError
+
+from libs.qiniuyun.qiniu_storage import storage
+from users.models import User
+from utils.decorators import login_required
+from utils.param_checking import image_file
 from utils.response_code import RET
 # Create your views here.
 from django.views import View
+
+logger = logging.getLogger('django')
 
 
 class RegisterView(View):
@@ -26,7 +38,27 @@ class RegisterView(View):
         # 判断手机号是否合法
         if not re.match(r'^1[3-9]\d{9}$', mobile):
             return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '请输入正确的手机号'})
-
+        # 检验用户输入的验证码和redis的是否一致
+        redis_conn = get_redis_connection('verify_code')
+        real_sms_code = redis_conn.get('sms_%s' % mobile)
+        if not real_sms_code:
+            return http.JsonResponse({'errno': RET.DATAERR, 'errmsg': '验证码已经过期'})
+        if real_sms_code.decode() != phonecode:
+            return http.JsonResponse({'errno': RET.DATAERR, 'errmsg': '验证码输入错误'})
+        # 三.业务逻辑处理
+        save_data = {
+            'username': mobile,
+            'mobile': mobile,
+            'password': password
+        }
+        try:
+            user = User.objects.create_user(**save_data)
+        except Exception as e:
+            logger.error(e)
+            return http.JsonResponse({'errno': RET.DBERR, 'errmsg': '注册失败'})
+        # 状态保持
+        login(request, user)
+        # 返回响应
         return http.JsonResponse({'errno': RET.OK, 'errmsg': '注册成功'})
 
 
@@ -41,7 +73,7 @@ class LoginView(View):
             return http.JsonResponse({'errno': RET.SESSIONERR, 'errmsg': '用户未登陆'})
         data = {
             'user_id': user.id,
-            'username': user.username
+            'name': user.username
         }
         return http.JsonResponse({'errno': RET.OK, 'errmsg': '已登陆', 'data': data})
 
@@ -59,7 +91,7 @@ class LoginView(View):
         # 判断手机号是否合法
         if not re.match(r'^1[3-9]\d{9}$', mobile):
             return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '请输入正确的手机号'})
-        # 认证用户鞥路
+        # 认证用户是否登陆
         user = authenticate(username=mobile, password=password)
         if user is None:
             return http.JsonResponse({'errno': RET.LOGINERR, 'errmsg': '请输入正确的手机号'})
@@ -70,4 +102,113 @@ class LoginView(View):
     def delete(self, request):
         # 退出登陆
         logout(request)
-        return http.JsonResponse({'errno': RET.OK, 'errmsg': '退出成功'})
+        return http.JsonResponse({'errno': RET.OK, 'errmsg': '已登出'})
+
+
+class UserInfoView(View):
+    '''
+    需求：用户中心
+    '''
+
+    @method_decorator(login_required)
+    def get(self, request):
+        '''
+        {
+            "data": {
+                "avatar": "http://oyucyko3w.bkt.clouddn.com/FmWZRObXNX6TdC8D688AjmDAoVrS",
+                "create_time": "2017-11-07 01:10:21",
+                "mobile": "18599998888",
+                "name": "哈哈哈哈哈哈",
+                "user_id": 1
+            },
+            "errmsg": "OK",
+            "errno": "0"
+        }
+        声明：数据库中目前没有avatar字段，create_time我们用date_join字段。所以需要先给模型类添加字段
+        '''
+        # 1.获取数据
+        user = request.user
+        return http.JsonResponse({'errno': RET.OK, 'errmsg': 'OK', 'data': user.to_basic_dict()})
+
+
+class AvatarView(View):
+    '''
+    上传头像
+    '''
+
+    @method_decorator(login_required)
+    def post(self, request):
+        # 1.接收参数
+        avatar = request.FILES.get('avatar')
+        if not avatar:
+            return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '参数错误'})
+        if not image_file(avatar):
+            return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '参数错误'})
+        # 读取出文件对象的二进制数据
+        file_data = avatar.read()
+        #
+        try:
+            key = storage(file_data)
+        except Exception as e:
+            logger.error(e)
+            return http.JsonResponse({'errno': RET.SERVERERR, 'errmsg': '图片保存失败'})
+        try:
+            request.user.avatar = key
+            request.user.save()
+        except DatabaseError as e:
+            logger.error(e)
+            return http.JsonResponse({'errno': RET.SERVERERR, 'errmsg': '图片保存失败'})
+        data = {
+            'avatar_url': settings.QINIU_URL + key
+        }
+        print(data)
+        return http.JsonResponse({'errno': RET.OK, 'errmsg': '头像上传成功', 'data': data})
+
+
+class ModifyNameView(View):
+    '''
+    修改用户名
+    '''
+
+    @method_decorator(login_required)
+    def put(self, request):
+        dict_data = json.loads(request.body.decode())
+        username = dict_data.get('name')
+
+        user = request.user
+        try:
+            user.username = username
+            user.save()
+        except DatabaseError as e:
+            logger.error(e)
+            return http.JsonResponse({'errno': RET.SERVERERR, 'errmsg': '数据保存失败'})
+        return http.JsonResponse({'errno': RET.OK, 'errmsg': '用户名修改成功'})
+
+
+class UserAuthView(View):
+    '''实名制认证'''
+
+    @method_decorator(login_required)
+    def dispatch(self, *args, **kwargs):
+        return super(UserAuthView, self).dispatch(*args, **kwargs)
+
+    def get(self, request):
+        data = request.user.to_auth_dict()
+        return http.JsonResponse({'errno': RET.OK, 'errmsg': '认证信息查询成功', 'data': data})
+
+    def post(self, request):
+        dict_data = json.loads(request.body.decode())
+        real_name = dict_data.get('real_name')
+        id_card = dict_data.get('id_card')
+        if not all([real_name, id_card]):
+            return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '参数不全'})
+        user = request.user
+        try:
+            user.real_name = real_name
+            user.id_card = id_card
+            user.save()
+        except DatabaseError as e:
+            logger.error(e)
+            return http.JsonResponse({'errno': RET.DBERR, 'errmsg': '数据保存失败'})
+        else:
+            return http.JsonResponse({'errno': RET.OK, 'errmsg': '认证信息保存成功'})

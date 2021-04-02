@@ -20,4 +20,6 @@ urlpatterns = [
     url(r'^admin/', admin.site.urls),
     url(r'^api/v1.0/', include('users.urls')),
     url(r'^api/v1.0/', include('verifications.urls')),
+    url(r'^api/v1.0/', include('homes.urls')),
+
 ]
