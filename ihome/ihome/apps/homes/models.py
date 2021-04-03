@@ -60,7 +60,7 @@ class House(BaseModel):
             'area_name': self.area.name,
             'address': self.address,
             'room_count': self.room_count,
-            'image_url': settings.QINIU_URL + self.index_image_url if self.index_image_url else '',
+            'img_url': settings.QINIU_URL + self.index_image_url if self.index_image_url else '',
             'user_avatar': settings.QINIU_URL + self.user.avatar.name if self.user.avatar.name else '',
         }
         return house_dict

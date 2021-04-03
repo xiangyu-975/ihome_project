@@ -1,14 +1,17 @@
+import datetime
 import json
 import logging
 
 from django import http
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.shortcuts import render
 
 # Create your views here.
 from django.utils.decorators import method_decorator
 from django.views import View
+from django_redis import get_redis_connection
 from pymysql import DatabaseError
 
 from homes.models import Area, House, Facility, HouseImage
@@ -35,6 +38,68 @@ class AreaView(View):
 
 
 class HouseView(View):
+    def get(self, request):
+        # 获取所有参数
+        agrs = request.GET
+        area_id = agrs.get('aid', '')
+        start_date_str = agrs.get('sd', '')
+        end_date_str = agrs.get('ed', '')
+        # booking(订单量), price-inc(低到高), price-des(高到低),
+        sort_key = agrs.get('sk', 'new')
+        page = agrs.get('p', '1')
+        try:
+            page = int(page)
+        except Exception as e:
+            logger.error(e)
+            return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '参数错误'})
+        redis_conn = get_redis_connection('house_cache')
+        try:
+            redis_key = 'houses_%s_%s_%s_%s' % (area_id, start_date_str, end_date_str, sort_key)
+            data = redis_conn.hget(redis_key, page)
+            if data:
+                return http.JsonResponse({'errno': RET.OK, 'errmsg': 'OK', 'data': json.loads(data)})
+        except Exception as e:
+            logger.error(e)
+        # 对日期进行相关处理
+        try:
+            start_date = None
+            end_date = None
+            if start_date_str:
+                start_date = datetime.datetime.strftime(start_date_str, '%Y-%m-%d')
+            if end_date_str:
+                end_date = datetime.datetime.strftime(end_date_str, '%Y-%m-%d')
+            # 如果开始时间大于或者等于结束时间，就报错
+            if start_date and end_date:
+                assert start_date > end_date, Exception('开始时间大于结束时间')
+        except Exception as e:
+            logger.error(e)
+            return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '参数错误'})
+        filters = {}
+        # 如果区域ID存在
+        if area_id:
+            filters['area_id'] = area_id
+        # 定义数组保存冲突的订单
+        if start_date and end_date:
+            # 如果订单的开始时间 < 结束时间 and 订单结束时间 > 开始时间
+            conflict_order = Order.objects.filter(begin_date__lt=end_date, end_date__gt=start_date)
+        elif start_date:
+            # 订单结束时间大于开始时间
+            conflict_order = Order.objects.filter(end_date__gt=start_date)
+        elif end_date:
+            # 订单开始时间小于结束时间
+            conflict_order = Order.objects.filter(start_date__lt=end_date)
+        else:
+            conflict_order = []
+        # 取到冲突订单的房屋ID
+        conflict_house_id = [order.house_id for order in conflict_order]
+        # 添加条件：查询到的房屋不包括冲突订单的中的房屋ID
+        if conflict_house_id:
+            filters['id__in'] = conflict_house_id
+        # 查询数据
+        if sort_key == 'booking':
+            # 订单量从高到底
+            houses_query = House.objects.filter(**filters).order_by('-order_count')
+
     # 发布房源
     @method_decorator(login_required)
     def post(self, request):
@@ -160,3 +225,21 @@ class HouseImageView(View):
             'url': settings.QINIU_URL + key
         }
         return http.JsonResponse({'errno': RET.OK, 'errmsg': 'OK', 'data': data})
+
+
+class HouseIndexView(View):
+    '''首页推荐房间显示'''
+
+    def get(self, request):
+        houses_list = cache.get('house_index')
+        if not houses_list:
+            try:
+                houses = House.objects.order_by('-order_count')[0:5]
+            except Exception as e:
+                logger.error(e)
+                return http.JsonResponse({'errno': RET.DBERR, 'errmsg': '查询数据库失败'})
+            houses_list = [house.to_basic_dict() for house in houses]
+            cache.set('house_index', houses_list, 3600)
+
+        # 返回数据
+        return http.JsonResponse({'errno': RET.OK, 'errmsg': 'OK', 'data': houses_list})
