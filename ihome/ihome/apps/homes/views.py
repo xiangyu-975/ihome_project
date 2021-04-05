@@ -7,7 +7,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.shortcuts import render
-
+from django.core.paginator import Paginator
 # Create your views here.
 from django.utils.decorators import method_decorator
 from django.views import View
@@ -16,6 +16,7 @@ from pymysql import DatabaseError
 
 from homes.models import Area, House, Facility, HouseImage
 from libs.qiniuyun.qiniu_storage import storage
+from utils import constants
 from utils.decorators import login_required
 from utils.param_checking import image_file
 from utils.response_code import RET
@@ -99,6 +100,42 @@ class HouseView(View):
         if sort_key == 'booking':
             # 订单量从高到底
             houses_query = House.objects.filter(**filters).order_by('-order_count')
+            # 价格从低到高
+        elif sort_key == 'price-inc':
+            houses_query = House.objects.filter(**filters).order_by('price')
+            # 价格从高到低
+        elif sort_key == 'price-des':
+            houses_query = House.objects.filter(**filters).order_by('-price')
+            # 默认创建时间最新
+        else:
+            houses_query = House.objects.filter(**filters).order_by('-create_time')
+        paginator = Paginator(houses_query, constants.HOUSE_LIST_PAGE_CAPACITY)
+        # 获取当前对象
+        page_houses = paginator.page(page)
+        # 获取总页数
+        total_page = paginator.num_pages
+        houses = [house.to_basic_dict() for house in page_houses]
+        data = {
+            'total_page': total_page,
+            'houses': houses,
+        }
+        if page <= total_page:
+            try:
+                # 生成缓存用的key
+                redis_key = 'houses_%s_%s_%s_%s' % (area_id, start_date_str, end_date_str, sort_key)
+                # 获取 redis_store 的 pipeline 对象，其可以一次做多个redis操作
+                pl = redis_conn.pipeline()
+                # 开启事务
+                pl.multi()
+                # 缓存数据
+                pl.hset(redis_key, page, json.dumps(data))
+                # 设置有效期时间
+                pl.expire(redis_key, constants.HOUSE_LIST_REDIS_EXPIRES)
+                # 提交事务
+                pl.execute()
+            except Exception as e:
+                logger.error(e)
+        return http.JsonResponse({'errno': RET.OK, 'errmsg': 'OK', 'data': data})
 
     # 发布房源
     @method_decorator(login_required)
@@ -243,3 +280,35 @@ class HouseIndexView(View):
 
         # 返回数据
         return http.JsonResponse({'errno': RET.OK, 'errmsg': 'OK', 'data': houses_list})
+
+
+class HouseDetailView(View):
+    '''显示房间详情'''
+
+    def get(self, request, house_id):
+        try:
+            house = House.objects.get(id=house_id)
+        except Exception as e:
+            logger.error(e)
+            return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '参数错误'})
+        user = request.user
+        if not user.is_authenticated:
+            user_id = -1
+        else:
+            user_id = user.id
+        # 先从redis中取
+        redis_conn = get_redis_connection('house_cache')
+        house_dict = redis_conn.get('house_info_' + house_id)
+        # 如果有值，那么返回数据
+        if house_dict:
+            return http.JsonResponse(
+                {'errno': RET.OK, 'errmsg': 'OK', 'data': {"user_id": user_id, 'house': json.loads(house_dict)}})
+        # 将数据缓存到redis中
+        house_dict = house.to_full_dict()
+        try:
+            redis_conn.setex('house_info_' + house_id, constants.HOUSE_DETAIL_REDIS_EXPIRE_SECOND,
+                             json.dumps(house_dict))
+        except Exception as e:
+            logger.error(e)
+        # 返回数据
+        return http.JsonResponse({'errno': RET.OK, 'errmsg': 'OK', 'data': {'user_id': user_id, 'house': house_dict}})

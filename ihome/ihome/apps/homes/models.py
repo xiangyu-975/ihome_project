@@ -65,6 +65,49 @@ class House(BaseModel):
         }
         return house_dict
 
+    def to_full_dict(self):
+        '''将详细信息转化为字典数据'''
+        house_dict = {
+            'hid': self.pk,
+            'user_id': self.user.id,
+            'user_name': self.user.username,
+            'user_avatar': settings.QINIU_URL + self.user.avatar.name if self.user.avatar.name else '',
+            'title': self.title,
+            'price': self.price,
+            'address': self.address,
+            'room_count': self.room_count,
+            'acreage': self.acreage,
+            'unit': self.unit,
+            'capacity': self.capacity,
+            'beds': self.beds,
+            'deposit': self.deposit,
+            'min_days': self.min_days,
+            'max_days': self.max_days,
+        }
+        # 房屋图片
+        img_urls = []
+        for image in self.houseimage_set.all():
+            img_urls.append(settings.QINIU_URL + image.url)
+        house_dict['img_urls'] = img_urls
+        # 房屋设施
+        facilities = []
+        for facility in self.facility.all():
+            facilities.append(facility.id)
+        house_dict['facilities'] = facilities
+        # 评论信息
+        comments = []
+        orders = Order.objects.filter(house=self, status=Order.ORDER_STATUS['COMPLETE'],
+                                      comment__isnull=False).order_by('-update_time')[0:30]
+        for order in orders:
+            comment = {
+                'comment': order.comment,  # 评论的内容
+                'user_name': order.user.username if order.user.username != order.user.mobile else '匿名用户',  # 发表评论
+                'ctime': order.update_time.strftime('%Y-%m-%d %H-%M-%S')
+            }
+            comments.append(comment)
+        house_dict['comments'] = comments
+        return house_dict
+
 
 class HouseImage(BaseModel):
     '''
