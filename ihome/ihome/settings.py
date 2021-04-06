@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     'users',
     'verifications',
     'homes',
+    'orders'
 ]
 
 MIDDLEWARE = [

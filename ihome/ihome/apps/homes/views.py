@@ -16,6 +16,7 @@ from pymysql import DatabaseError
 
 from homes.models import Area, House, Facility, HouseImage
 from libs.qiniuyun.qiniu_storage import storage
+from orders.models import Order
 from utils import constants
 from utils.decorators import login_required
 from utils.param_checking import image_file

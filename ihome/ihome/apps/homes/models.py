@@ -1,7 +1,10 @@
+import datetime
+
 from django.conf import settings
 from django.db import models
 
 # Create your models here.
+from orders.models import Order
 from utils.model import BaseModel
 
 
@@ -102,7 +105,8 @@ class House(BaseModel):
             comment = {
                 'comment': order.comment,  # 评论的内容
                 'user_name': order.user.username if order.user.username != order.user.mobile else '匿名用户',  # 发表评论
-                'ctime': order.update_time.strftime('%Y-%m-%d %H-%M-%S')
+                # 'ctime': datetime.datetime.strftime(order.update_time, '%Y-%m-%d %H:%M:%S'),
+                'ctime': order.update_time.strftime('%Y-%m-%d %H:%M:%S')
             }
             comments.append(comment)
         house_dict['comments'] = comments

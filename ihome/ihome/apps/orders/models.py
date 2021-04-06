@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 # Create your models here.
@@ -46,3 +47,19 @@ class Order(BaseModel):
 
     class Meta:
         db_table = 'tb_order'
+
+    def to_dict(self):
+        '''将订单信息转化为字典数据'''
+        order_ditc = {
+            'order_id': self.pk,
+            'title': self.house.title,
+            'ctime': self.create_time.strftime('%Y-%m-%d %H:%M'),
+            'comment': self.comment if self.comment else '',
+            'days': self.days,
+            'end_time': self.end_date.strftime('%Y-%m-d'),
+            'amount': self.amount,
+            'status': self.status,
+            'img_url': settings.QINIU_URL + self.house.index_image_url if self.house.index_image_url else '',
+            'start_time': self.begin_date.strftime('%Y-%m-%d')
+        }
+        return order_ditc
