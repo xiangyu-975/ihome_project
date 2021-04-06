@@ -3,11 +3,13 @@ import json
 import logging
 
 from django import http
+from django.db import transaction
 from django.shortcuts import render
 
 # Create your views here.
 from django.utils.decorators import method_decorator
 from django.views import View
+from django_redis import get_redis_connection
 
 from homes.models import House
 from orders.models import Order
@@ -107,7 +109,7 @@ class OrdersStatusView(View):
         user = request.user
         data_dict = json.loads(request.body.decode())
         action = data_dict.get('action')
-        if action not in ['action', 'reason']:
+        if action not in ('accept', 'reject'):
             return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '参数错误'})
         try:
             order = Order.objects.filter(id=order_id, status=Order.ORDER_STATUS['WAIT_ACCEPT']).first()
@@ -137,3 +139,45 @@ class OrdersStatusView(View):
             logger.error(e)
             return http.JsonResponse({'errno': RET.DBERR, 'errmsg': '保存订单失败'})
         return http.JsonResponse({'errno': RET.OK, 'errmsg': 'OK'})
+
+
+class OrdersCommentView(View):
+    '''订单评论'''
+
+    @method_decorator(login_required)
+    def put(self, request, order_id):
+        # 获取参数判断参数
+        dict_data = json.loads(request.body.decode())
+        comment = dict_data.get('comment')
+        if not comment:
+            return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '请输入评论内容'})
+        # 通过订单ID查出订单模型
+        try:
+            order = Order.objects.filter(id=order_id, status=Order.ORDER_STATUS['WAIT_COMMENT']).first()
+            house = order.house
+        except Exception as e:
+            logger.error(e)
+            return http.JsonResponse({'errno': RET.PARAMERR, 'errmsg': '数据库查询失败'})
+        # 更新数据
+        house.order_count += 1
+        order.status = Order.ORDER_STATUS['COMPLETE']
+        order.comment = comment
+        # 更新数据库
+        with transaction.atomic():
+            save_id = transaction.savepoint()
+            try:
+                house.save()
+                order.save()
+            except Exception as e:
+                logger.error(e)
+                transaction.savepoint_rollback(save_id)
+                return http.JsonResponse({'errno': RET.DBERR, 'errmsg': '更新数据库失败'})
+            transaction.savepoint_commit(save_id)
+        # 删除redis缓存中的房屋信息,因为房屋信息已经更新
+        redis_conn = get_redis_connection('house_cache')
+        try:
+            redis_conn.delete('house_info_' + str(house.id))
+        except Exception as e:
+            logger.error(e)
+            return http.JsonResponse({'errno': RET.DBERR, 'errmsg': '删除失败'})
+        return http.JsonResponse({'errno': RET.OK, 'errmsg': '评论成功'})

@@ -56,10 +56,10 @@ class Order(BaseModel):
             'ctime': self.create_time.strftime('%Y-%m-%d %H:%M'),
             'comment': self.comment if self.comment else '',
             'days': self.days,
-            'end_time': self.end_date.strftime('%Y-%m-d'),
+            'end_date': self.end_date.strftime('%Y-%m-%d'),
             'amount': self.amount,
-            'status': self.status,
+            'status': Order.ORDER_STATUS_ENUM[self.status],
             'img_url': settings.QINIU_URL + self.house.index_image_url if self.house.index_image_url else '',
-            'start_time': self.begin_date.strftime('%Y-%m-%d')
+            'start_date': self.begin_date.strftime('%Y-%m-%d')
         }
         return order_ditc
